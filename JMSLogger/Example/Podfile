@@ -1,0 +1,12 @@
+target 'JMSLogger', :exclusive => true do
+  pod "JMSLogger", :path => "../"
+end
+
+target 'Tests', :exclusive => true do
+	#pod "JMSLogger", :path => "../"
+	
+	#pod 'Realm.Headers'
+
+  pod 'Specta', '~> 0.2.1'
+  pod 'Expecta'
+end
