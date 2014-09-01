@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "D065ECA1AA8B459EB65943B7"
-               BuildableName = "libPods-Tests-Specta.a"
-               BlueprintName = "Pods-Tests-Specta"
+               BlueprintIdentifier = "DECCF093BADF493F82627396"
+               BuildableName = "libPods-JMSLogger-AFNetworking.a"
+               BlueprintName = "Pods-JMSLogger-AFNetworking"
                ReferencedContainer = "container:Pods.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
