@@ -18,8 +18,8 @@ Pod::Spec.new do |s|
   # s.screenshots     = "www.example.com/screenshots_1", "www.example.com/screenshots_2"
   s.license          = 'MIT'
   s.author           = { "José Manuel Sánchez" => "buscarini@gmail.com" }
-  s.source           = { :git => "https://github.com/<GITHUB_USERNAME>/JMSLogger.git", :tag => s.version.to_s }
-  # s.social_media_url = 'https://twitter.com/<TWITTER_USERNAME>'
+  s.source           = { :git => "https://github.com/buscarini/JMSLogger.git", :tag => "0.0.1" }
+  # s.social_media_url = 'https://twitter.com/buscarini'
 
 	s.ios.deployment_target = '7.0'
 	s.osx.deployment_target = '10.8'
