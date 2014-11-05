@@ -16,96 +16,70 @@
 //
 ////////////////////////////////////////////////////////////////////////////
 
-#import "RLMObjectStore.h"
+#import "RLMObjectStore.hpp"
 #import "RLMRealm_Private.hpp"
 #import "RLMArray_Private.hpp"
-#import "RLMSchema_Private.h"
 #import "RLMObjectSchema_Private.hpp"
 #import "RLMObject_Private.h"
 #import "RLMProperty_Private.h"
-#import "RLMAccessor.h"
 #import "RLMQueryUtil.hpp"
 #import "RLMUtil.hpp"
 
 #import <objc/runtime.h>
 
-// get the table used to store object of objectClass
-static inline tightdb::TableRef RLMTableForObjectClass(RLMRealm *realm,
-                                                       NSString *className,
-                                                       bool &created) {
-    NSString *tableName = realm.schema.tableNamesForClass[className];
-    return realm.group->get_or_add_table(tableName.UTF8String, &created);
-}
-static inline tightdb::TableRef RLMTableForObjectClass(RLMRealm *realm,
-                                                       NSString *className) {
-    NSString *tableName = realm.schema.tableNamesForClass[className];
-    return realm.group->get_or_add_table(tableName.UTF8String);
-}
-
-
 static void RLMVerifyAndAlignColumns(RLMObjectSchema *tableSchema, RLMObjectSchema *objectSchema) {
-    // FIXME - this method should calculate all mismatched columns, and missing/extra columns, and include
-    //         all of this information in a single exception
-    // FIXME - verify property attributes
-
-    // check count
-    if (tableSchema.properties.count != objectSchema.properties.count) {
-        @throw [NSException exceptionWithName:@"RLMException"
-                                       reason:@"Column count does not match interface - migration required"
-                                     userInfo:nil];
-    }
+    NSMutableArray *properties = [NSMutableArray arrayWithCapacity:objectSchema.properties.count];
+    NSMutableArray *exceptionMessages = [NSMutableArray array];
 
     // check to see if properties are the same
-    for (RLMProperty *schemaProp in objectSchema.properties) {
-        RLMProperty *tableProp = tableSchema[schemaProp.name];
-        if (![tableProp.name isEqualToString:schemaProp.name]) {
-            @throw [NSException exceptionWithName:@"RLMException"
-                                           reason:@"Existing property does not match interface - migration required"
-                                         userInfo:@{@"property num": @(tableProp.column),
-                                                    @"existing property name": tableProp.name,
-                                                    @"new property name": schemaProp.name}];
+    for (RLMProperty *tableProp in tableSchema.properties) {
+        RLMProperty *schemaProp = objectSchema[tableProp.name];
+        if (!schemaProp) {
+            [exceptionMessages addObject:[NSString stringWithFormat:@"Property '%@' is missing from latest object model.", tableProp.name]];
+            continue;
         }
         if (tableProp.type != schemaProp.type) {
-            @throw [NSException exceptionWithName:@"RLMException"
-                                           reason:@"Property types do not match - migration required"
-                                         userInfo:@{@"property name": tableProp.name,
-                                                    @"existing property type": RLMTypeToString(tableProp.type),
-                                                    @"new property type": RLMTypeToString(schemaProp.type)}];
+            [exceptionMessages addObject:[NSString stringWithFormat:@"Property types for '%@' property do not match. Old type '%@', new type '%@'.",
+                                          tableProp.name, RLMTypeToString(tableProp.type), RLMTypeToString(schemaProp.type)]];
+            continue;
         }
         if (tableProp.type == RLMPropertyTypeObject || tableProp.type == RLMPropertyTypeArray) {
             if (![tableProp.objectClassName isEqualToString:schemaProp.objectClassName]) {
-                @throw [NSException exceptionWithName:@"RLMException"
-                                               reason:@"Property objectClass does not match - migration required"
-                                             userInfo:@{@"property name": tableProp.name,
-                                                        @"existign objectClass": tableProp.objectClassName,
-                                                        @"new property name": schemaProp.objectClassName}];
+                [exceptionMessages addObject:[NSString stringWithFormat:@"Target object type for property '%@' does not match. Old type '%@', new type '%@'.",
+                                              tableProp.name, tableProp.objectClassName, schemaProp.objectClassName]];
+            }
+        }
+        if (tableProp.isPrimary != schemaProp.isPrimary) {
+            if (tableProp.isPrimary) {
+                [exceptionMessages addObject:[NSString stringWithFormat:@"Property '%@' is no longer a primary key.", tableProp.name]];
+            }
+            else {
+                [exceptionMessages addObject:[NSString stringWithFormat:@"Property '%@' has been made a primary key.", tableProp.name]];
             }
         }
 
         // align
         schemaProp.column = tableProp.column;
+        [properties addObject:schemaProp];
     }
-}
 
-
-// verify and align all tables in schema
-static void RLMVerifyAndAlignSchema(RLMSchema *schema) {
-    for (RLMObjectSchema *objectSchema in schema.objectSchema) {
-        // get table schema
-        tightdb::Table &table = *objectSchema->_table;
-        RLMObjectSchema *tableSchema = [RLMObjectSchema schemaForTable:&table className:objectSchema.className];
-
-        // verify and align
-        RLMVerifyAndAlignColumns(tableSchema, objectSchema);
-
-        // create accessors
-        // FIXME - we need to generate different accessors keyed by the hash of the objectSchema (to preserve column ordering)
-        //         it's possible to have multiple realms with different on-disk layouts, which requires
-        //         us to have multiple accessors for each type/instance combination
-        objectSchema.accessorClass = RLMAccessorClassForObjectClass(objectSchema.objectClass, objectSchema);
+    // check for new missing properties
+    for (RLMProperty *schemaProp in objectSchema.properties) {
+        if (!tableSchema[schemaProp.name]) {
+            [exceptionMessages addObject:[NSString stringWithFormat:@"Property '%@' has been added to latest object model.", schemaProp.name]];
+        }
     }
-}
 
+    // throw if errors
+    if (exceptionMessages.count) {
+        @throw [NSException exceptionWithName:@"RLMException"
+                                       reason:[NSString stringWithFormat:@"Migration is required for object type '%@' due to the following errors:\n- %@",
+                                               objectSchema.className, [exceptionMessages componentsJoinedByString:@"\n- "]]
+                                     userInfo:nil];
+    }
+    // ensure the order of the properties matches the column order in the table
+    objectSchema.properties = properties;
+}
 
 // create a column for a property in a table
 // NOTE: must be called from within write transaction
@@ -121,174 +95,197 @@ static void RLMCreateColumn(RLMRealm *realm, tightdb::Table &table, RLMProperty 
         default: {
             prop.column = table.add_column(tightdb::DataType(prop.type), prop.name.UTF8String);
             if (prop.attributes & RLMPropertyAttributeIndexed) {
-                table.set_index(prop.column);
+                // FIXME - support other types
+                if (prop.type != RLMPropertyTypeString) {
+                    NSLog(@"RLMPropertyAttributeIndexed only supported for 'NSString' properties");
+                }
+                else {
+                    table.add_search_index(prop.column);
+                }
             }
         }
     }
 }
 
-// NOTE: must be called from within write transaction
-static bool RLMCreateMissingTables(RLMRealm *realm) {
-    bool changed = false;
-    for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
-        bool created = false;
-        tightdb::TableRef table = RLMTableForObjectClass(realm, objectSchema.className, created);
-        changed |= created;
+void RLMRealmSetSchema(RLMRealm *realm, RLMSchema *targetSchema, bool verify) {
+    realm.schema = [targetSchema copy];
 
-        // store the table in this object schema
-        objectSchema->_table = move(table);
+    for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
+        // read-only realms may be missing tables entirely
+        objectSchema->_table = RLMTableForObjectClass(realm, objectSchema.className);
+        if (objectSchema->_table && verify) {
+            RLMObjectSchema *tableSchema = [RLMObjectSchema schemaFromTableForClassName:objectSchema.className realm:realm];
+            RLMVerifyAndAlignColumns(tableSchema, objectSchema);
+        }
+        if (!objectSchema.accessorClass) {
+            objectSchema.accessorClass = RLMAccessorClassForObjectClass(objectSchema.objectClass, objectSchema);
+        }
     }
-    return changed;
 }
 
-// add missing columns to objects described in targetSchema
-// NOTE: must be called from within write transaction
-static bool RLMAddMissingColumns(RLMRealm *realm) {
-    bool added = false;
+void RLMRealmCreateTables(RLMRealm *realm, RLMSchema *targetSchema, bool updateExisting) {
+    realm.schema = [targetSchema copy];
+
+    // first pass to create missing tables
+    bool changed = false;
+    NSMutableArray *objectSchemaToUpdate = [NSMutableArray array];
     for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
-        // add columns
-        RLMObjectSchema *tableSchema = [RLMObjectSchema schemaForTable:objectSchema->_table.get() className:objectSchema.className];
+        bool created = false;
+        objectSchema->_table = RLMTableForObjectClass(realm, objectSchema.className, created);
+        changed |= created;
+
+        // we will modify tables for any new objectSchema (table was created) or for all if updateExisting is true
+        if (updateExisting || created) {
+            [objectSchemaToUpdate addObject:objectSchema];
+        }
+    }
+
+    // second pass adds/removes columns for objectSchemaToUpdate
+    for (RLMObjectSchema *objectSchema in objectSchemaToUpdate) {
+        RLMObjectSchema *tableSchema = [RLMObjectSchema schemaFromTableForClassName:objectSchema.className realm:realm];
+
+        // add missing columns
         for (RLMProperty *prop in objectSchema.properties) {
             // add any new properties (new name or different type)
             if (!tableSchema[prop.name] || ![prop isEqualToProperty:tableSchema[prop.name]]) {
                 RLMCreateColumn(realm, *objectSchema->_table, prop);
-                added = true;
+                changed = true;
             }
         }
-    }
-    return added;
-}
 
-// remove old columns in the realm not in targetSchema
-// NOTE: must be called from within write transaction
-static bool RLMRemoveExtraColumns(RLMRealm *realm) {
-    bool removed = false;
-    for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
-        RLMObjectSchema *tableSchema = [RLMObjectSchema schemaForTable:objectSchema->_table.get() className:objectSchema.className];
-
-        // remove any columns from tableSchema not in final schema
+        // remove extra columns
         for (int i = (int)tableSchema.properties.count - 1; i >= 0; i--) {
             RLMProperty *prop = tableSchema.properties[i];
             if (!objectSchema[prop.name] || ![prop isEqualToProperty:objectSchema[prop.name]]) {
                 objectSchema->_table->remove_column(prop.column);
-                removed = true;
+                changed = true;
             }
         }
-    }
-    return removed;
-}
 
-bool RLMRealmIntializeWithSchema(RLMRealm *realm, RLMSchema *targetSchema) {
-    @try {
-        // begin transaction
-        [realm beginWriteTransaction];
-
-        // check to see if this is the first time loading this realm
-        bool initializing = (RLMRealmSchemaVersion(realm) == RLMNotVersioned);
-        if (initializing) {
-            // set initial version
-            RLMRealmSetSchemaVersion(realm, 0);
+        // update table metadata
+        if (objectSchema.primaryKeyProperty != nil) {
+            // if there is a primary key set, check if it is the same as the old key
+            if (tableSchema.primaryKeyProperty == nil || ![tableSchema.primaryKeyProperty isEqual:objectSchema.primaryKeyProperty]) {
+                RLMRealmSetPrimaryKeyForObjectClass(realm, objectSchema.className, objectSchema.primaryKeyProperty.name);
+                changed = true;
+            }
         }
-
-        // set the schema, mutating if we are initializing the db for the first time
-        RLMRealmSetSchema(realm, targetSchema, initializing);
-    }
-    @finally {
-        // FIXME: should rollback on exceptions rather than commit once that's implemented
-        [realm commitWriteTransaction];
-    }
-}
-
-bool RLMRealmSetSchema(RLMRealm *realm, RLMSchema *targetSchema, bool allowMutation) {
-    // set new schema
-    realm.schema = [targetSchema copy];
-
-    // create missing tables
-    bool changed = RLMCreateMissingTables(realm);
-
-    if (!allowMutation) {
-        // if not mutating then verify all tables match our schema
-        for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
-            RLMObjectSchema *tableSchema = [RLMObjectSchema schemaForTable:objectSchema->_table.get()
-                                                                 className:objectSchema.className];
-            RLMVerifyAndAlignColumns(tableSchema, objectSchema);
+        else if (tableSchema.primaryKeyProperty) {
+            // there is no primary key, so if thre was one nil out
+            RLMRealmSetPrimaryKeyForObjectClass(realm, objectSchema.objectClass, nil);
+            changed = true;
         }
     }
-    else {
-        // if mutating, add columns
-        changed = RLMAddMissingColumns(realm) || changed;
 
-        // remove expired columns
-        changed = RLMRemoveExtraColumns(realm) || changed;
-        
-        // FIXME - remove deleted objects
+    // FIXME - remove deleted tables
+
+    for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
+        // cache table instances on objectSchema
+        objectSchema->_table = RLMTableForObjectClass(realm, objectSchema.className);
+
+        RLMObjectSchema *tableSchema = [RLMObjectSchema schemaFromTableForClassName:objectSchema.className realm:realm];
+        RLMVerifyAndAlignColumns(tableSchema, objectSchema);
+
+        // create accessors
+        // FIXME - we need to generate different accessors keyed by the hash of the objectSchema (to preserve column ordering)
+        //         it's possible to have multiple realms with different on-disk layouts, which requires
+        //         us to have multiple accessors for each type/instance combination
+        objectSchema.accessorClass = RLMAccessorClassForObjectClass(objectSchema.objectClass, objectSchema);
     }
-    
-    // align all tables
-    RLMVerifyAndAlignSchema(realm.schema);
-
-    return changed;
 }
 
 static inline void RLMVerifyInWriteTransaction(RLMRealm *realm) {
     // if realm is not writable throw
     if (!realm.inWriteTransaction) {
         @throw [NSException exceptionWithName:@"RLMException"
-                                       reason:@"Can only add an object to a Realm in a write transaction - call beginWriteTransaction on a RLMRealm instance first."
+                                       reason:@"Can only add an object to a Realm in a write transaction - call beginWriteTransaction on an RLMRealm instance first."
                                      userInfo:nil];
     }
     RLMCheckThread(realm);
 }
 
-void RLMAddObjectToRealm(RLMObject *object, RLMRealm *realm) {
-    // if already in the right realm then no-op
-    if (object.realm == realm) {
-        return;
+template<typename F>
+static inline NSUInteger RLMCreateOrGetRowForObject(RLMObjectSchema *schema, F primaryValueGetter, RLMSetFlag options, bool &created) {
+    // try to get existing row if updating
+    size_t rowIndex = tightdb::not_found;
+    tightdb::Table &table = *schema->_table;
+    RLMProperty *primaryProperty = schema.primaryKeyProperty;
+    if ((options & RLMSetFlagUpdateOrCreate) && primaryProperty) {
+        // get primary value
+        id primaryValue = primaryValueGetter(primaryProperty);
+        
+        // search for existing object based on primary key type
+        if (primaryProperty.type == RLMPropertyTypeString) {
+            rowIndex = table.find_first_string(primaryProperty.column, RLMStringDataWithNSString(primaryValue));
+        }
+        else {
+            rowIndex = table.find_first_int(primaryProperty.column, [primaryValue longLongValue]);
+        }
     }
 
-    // verify writable
+    // if no existing, create row
+    created = NO;
+    if (rowIndex == tightdb::not_found) {
+        rowIndex = table.add_empty_row();
+        created = YES;
+    }
+
+    // get accessor
+    return rowIndex;
+}
+
+void RLMAddObjectToRealm(RLMObject *object, RLMRealm *realm, RLMSetFlag options) {
     RLMVerifyInWriteTransaction(realm);
 
-    // verify object
+    // verify that object is standalone
     if (object.deletedFromRealm) {
         @throw [NSException exceptionWithName:@"RLMException"
                                        reason:@"Adding a deleted object to a Realm is not permitted"
                                      userInfo:nil];
     }
+    if (object.realm) {
+        if (object.realm == realm) {
+            // no-op
+            return;
+        }
+        // for differing realms users must explicitly create the object in the second realm
+        @throw [NSException exceptionWithName:@"RLMException"
+                                       reason:@"Object is already persisted in a Realm"
+                                     userInfo:nil];
+    }
 
     // set the realm and schema
-    NSString *objectClassName = [object.class className];
+    NSString *objectClassName = object.objectSchema.className;
     RLMObjectSchema *schema = realm.schema[objectClassName];
     object.objectSchema = schema;
     object.realm = realm;
 
-    // _row may already be attached to a different table if the object was
-    // already in another realm, and setting it to the new table doesn't
-    // automatically detach it
-    object->_row.detach();
-
-    // create row in table
-    tightdb::Table &table = *schema->_table;
-    size_t rowIndex = table.add_empty_row();
-    object->_row = table[rowIndex];
+    // get or create row
+    bool created;
+    auto primaryGetter = [=](RLMProperty *p) { return [object valueForKey:p.getterName]; };
+    object->_row = (*schema->_table)[RLMCreateOrGetRowForObject(schema, primaryGetter, options, created)];
 
     // populate all properties
     for (RLMProperty *prop in schema.properties) {
         // get object from ivar using key value coding
         id value = nil;
-        if ([object respondsToSelector:NSSelectorFromString(prop.getterName)]) {
+        if ([object respondsToSelector:prop.getterSel]) {
             value = [object valueForKey:prop.getterName];
         }
 
         // FIXME: Add condition to check for Mixed once it can support a nil value.
         if (!value && prop.type != RLMPropertyTypeObject) {
             @throw [NSException exceptionWithName:@"RLMException"
-                                           reason:[NSString stringWithFormat:@"No value or default value specified for %@ property", prop.name]
+                                           reason:[NSString stringWithFormat:@"No value or default value specified for property '%@' in '%@'",
+                                                   prop.name, schema.className]
                                          userInfo:nil];
         }
 
         // set in table with out validation
-        RLMDynamicSet(object, prop, value);
+        // skip primary key when updating since it doesn't change
+        if (created || !prop.isPrimary) {
+            RLMDynamicSet(object, prop, value, options | (prop.isPrimary ? RLMSetFlagEnforceUnique : 0));
+        }
     }
 
     // switch class to use table backed accessor
@@ -296,7 +293,7 @@ void RLMAddObjectToRealm(RLMObject *object, RLMRealm *realm) {
 }
 
 
-RLMObject *RLMCreateObjectInRealmWithValue(RLMRealm *realm, NSString *className, id value) {
+RLMObject *RLMCreateObjectInRealmWithValue(RLMRealm *realm, NSString *className, id value, RLMSetFlag options) {
     // verify writable
     RLMVerifyInWriteTransaction(realm);
 
@@ -309,35 +306,40 @@ RLMObject *RLMCreateObjectInRealmWithValue(RLMRealm *realm, NSString *className,
     if (NSArray *array = RLMDynamicCast<NSArray>(value)) {
         array = RLMValidatedArrayForObjectSchema(value, objectSchema, schema);
 
-        // create row
-        tightdb::Table &table = *objectSchema->_table;
-        size_t rowIndex = table.add_empty_row();
-        object->_row = table[rowIndex];
+        // get or create our accessor
+        bool created;
+        auto primaryGetter = [=](RLMProperty *p) { return array[p.column]; };
+        object->_row = (*objectSchema->_table)[RLMCreateOrGetRowForObject(objectSchema, primaryGetter, options, created)];
 
         // populate
         NSArray *props = objectSchema.properties;
         for (NSUInteger i = 0; i < array.count; i++) {
-            RLMDynamicSet(object, (RLMProperty *)props[i], array[i]);
-        }
-    }
-    else if (NSDictionary *dict = RLMDynamicCast<NSDictionary>(value)) {
-        dict = RLMValidatedDictionaryForObjectSchema(value, objectSchema, schema);
-
-        // create row
-        tightdb::Table &table = *objectSchema->_table;
-        size_t rowIndex = table.add_empty_row();
-        object->_row = table[rowIndex];
-        
-        // populate
-        NSArray *props = objectSchema.properties;
-        for (RLMProperty *prop in props) {
-            RLMDynamicSet(object, prop, dict[prop.name]);
+            RLMProperty *prop = props[i];
+            // skip primary key when updating since it doesn't change
+            if (created || !prop.isPrimary) {
+                RLMDynamicSet(object, prop, array[i],
+                              options | RLMSetFlagUpdateOrCreate | (prop.isPrimary ? RLMSetFlagEnforceUnique : 0));
+            }
         }
     }
     else {
-        @throw [NSException exceptionWithName:@"RLMException"
-                                       reason:@"Values must be provided either as an array or dictionary"
-                                     userInfo:nil];
+        // get or create our accessor
+        bool created;
+        auto primaryGetter = [=](RLMProperty *p) { return [value valueForKey:p.name]; };
+        object->_row = (*objectSchema->_table)[RLMCreateOrGetRowForObject(objectSchema, primaryGetter, options, created)];
+
+        // assume dictionary or object with kvc properties
+        NSDictionary *dict = RLMValidatedDictionaryForObjectSchema(value, objectSchema, schema, !created);
+
+        // populate
+        for (RLMProperty *prop in objectSchema.properties) {
+            // skip missing properties and primary key when updating since it doesn't change
+            id propValue = dict[prop.name];
+            if (propValue && (created || !prop.isPrimary)) {
+                RLMDynamicSet(object, prop, propValue,
+                              options | RLMSetFlagUpdateOrCreate | (prop.isPrimary ? RLMSetFlagEnforceUnique : 0));
+            }
+        }
     }
 
     // switch class to use table backed accessor
@@ -356,17 +358,79 @@ void RLMDeleteObjectFromRealm(RLMObject *object) {
     object.realm = nil;
 }
 
-RLMArray *RLMGetObjects(RLMRealm *realm, NSString *objectClassName, NSPredicate *predicate) {
+void RLMDeleteAllObjectsFromRealm(RLMRealm *realm) {
+    RLMVerifyInWriteTransaction(realm);
+
+    // clear table for each object schema
+    for (RLMObjectSchema *objectSchema in realm.schema.objectSchema) {
+        objectSchema->_table->clear();
+    }
+}
+
+RLMResults *RLMGetObjects(RLMRealm *realm, NSString *objectClassName, NSPredicate *predicate) {
     RLMCheckThread(realm);
 
     // create view from table and predicate
     RLMObjectSchema *objectSchema = realm.schema[objectClassName];
+    if (!objectSchema->_table) {
+        // read-only realms may be missing tables since we can't add any
+        // missing ones on init
+        return [RLMEmptyResults emptyResultsWithObjectClassName:objectClassName realm:realm];
+    }
     tightdb::Query query = objectSchema->_table->where();
     RLMUpdateQueryWithPredicate(&query, predicate, realm.schema, objectSchema);
     
     // create and populate array
-    __autoreleasing RLMArray * array = [RLMArrayTableView arrayWithObjectClassName:objectClassName query:query realm:realm];
-    return array;
+    __autoreleasing RLMResults * results = [RLMResults resultsWithObjectClassName:objectClassName
+                                                                            query:std::make_unique<Query>(query)
+                                                                            realm:realm];
+    return results;
+}
+
+id RLMGetObject(RLMRealm *realm, NSString *objectClassName, id key) {
+    RLMCheckThread(realm);
+
+    RLMObjectSchema *objectSchema = realm.schema[objectClassName];
+
+    RLMProperty *primaryProperty = objectSchema.primaryKeyProperty;
+    if (!primaryProperty) {
+        NSString *msg = [NSString stringWithFormat:@"%@ does not have a primary key", objectClassName];
+        @throw [NSException exceptionWithName:@"RLMException" reason:msg userInfo:nil];
+    }
+
+    if (!objectSchema->_table) {
+        // read-only realms may be missing tables since we can't add any
+        // missing ones on init
+        return nil;
+    }
+
+    size_t row = tightdb::not_found;
+    if (primaryProperty.type == RLMPropertyTypeString) {
+        if (NSString *str = RLMDynamicCast<NSString>(key)) {
+            row = objectSchema->_table->find_first_string(primaryProperty.column, RLMStringDataWithNSString(str));
+        }
+        else {
+            @throw [NSException exceptionWithName:@"RLMException"
+                                           reason:[NSString stringWithFormat:@"Invalid value '%@' for primary key", key]
+                                         userInfo:nil];
+        }
+    }
+    else {
+        if (NSNumber *number = RLMDynamicCast<NSNumber>(key)) {
+            row = objectSchema->_table->find_first_int(primaryProperty.column, number.longLongValue);
+        }
+        else {
+            @throw [NSException exceptionWithName:@"RLMException"
+                                           reason:[NSString stringWithFormat:@"Invalid value '%@' for primary key", key]
+                                         userInfo:nil];
+        }
+    }
+
+    if (row == tightdb::not_found) {
+        return nil;
+    }
+
+    return RLMCreateObjectAccessor(realm, objectClassName, row);
 }
 
 // Create accessor and register with realm
@@ -381,5 +445,4 @@ RLMObject *RLMCreateObjectAccessor(RLMRealm *realm, NSString *objectClassName, N
     accessor->_row = table[index];
     return accessor;
 }
-
 

@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "EAF0446FF4E14480AAA89B5A"
+               BlueprintIdentifier = "BD19B1C34FB02BD51B2D10E4"
                BuildableName = "JMSLogger.bundle"
                BlueprintName = "JMSLogger"
                ReferencedContainer = "container:Pods.xcodeproj">

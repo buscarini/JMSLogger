@@ -37,31 +37,41 @@
 	return array;
 }
 
++ (NSArray *) arrayWithRLMResults: (RLMResults *) rlmResults {
+	NSMutableArray *array = [NSMutableArray arrayWithCapacity:rlmResults.count];
+	
+	for (JMSLogMessage *message in rlmResults) {
+		[array addObject:message];
+	}
+	
+	return array;
+}
+
 - (void) clearAllLogMessages {
 	RLMRealm *realm = [RLMRealm defaultRealm];
 	[realm beginWriteTransaction];
-	RLMArray *messages = [JMSLogMessage objectsWithPredicate:nil];
+	RLMResults *messages = [JMSLogMessage objectsWithPredicate:nil];
 	[realm deleteObjects:messages];
 	[realm commitWriteTransaction];
 }
 
 - (NSArray *) logMessagesWithLevel:(NSInteger) logLevel {
-	RLMArray *objects = [JMSLogMessage objectsWhere:@"logLevel >= %d",logLevel];
-	objects = [objects arraySortedByProperty:@"date" ascending:NO];
-	return [JMSLogger arrayWithRLMArray:objects];
+	RLMResults *objects = [JMSLogMessage objectsWhere:@"logLevel >= %d",logLevel];
+	objects = [objects sortedResultsUsingProperty:@"date" ascending:NO];
+	return [JMSLogger arrayWithRLMResults:objects];
 }
 
 - (NSArray *) logMessagesWithLevel:(NSInteger) logLevel context:(NSInteger)context {
-	RLMArray *objects = [JMSLogMessage objectsWhere:@"logLevel >= %d AND context=%d",logLevel,context];
-	objects = [objects arraySortedByProperty:@"date" ascending:NO];
-	return [JMSLogger arrayWithRLMArray:objects];
+	RLMResults *objects = [JMSLogMessage objectsWhere:@"logLevel >= %d AND context=%d",logLevel,context];
+	objects = [objects sortedResultsUsingProperty:@"date" ascending:NO];
+	return [JMSLogger arrayWithRLMResults:objects];
 }
 
 /// Get the last *limit* log messages with logLevel or less and matching context
 - (NSArray *) logMessagesWithLevel:(NSInteger) logLevel limit:(NSInteger)limit context:(NSInteger)context {
-	RLMArray *objects = [JMSLogMessage objectsWhere:@"logLevel >= %d AND context=%d",logLevel,context];
-	objects = [objects arraySortedByProperty:@"date" ascending:NO];
-	NSArray *results = [JMSLogger arrayWithRLMArray:objects];
+	RLMResults *objects = [JMSLogMessage objectsWhere:@"logLevel >= %d AND context=%d",logLevel,context];
+	objects = [objects sortedResultsUsingProperty:@"date" ascending:NO];
+	NSArray *results = [JMSLogger arrayWithRLMResults:objects];
 	if (results.count>limit) {
 		return [results subarrayWithRange:NSMakeRange(0, limit)];
 	}

@@ -1,3 +1,6 @@
+source 'https://buscarini@bitbucket.org/buscarini/jmspods.git'
+source 'https://github.com/CocoaPods/Specs.git'
+
 target 'JMSLogger', :exclusive => true do
   pod "JMSLogger", :path => "../"
 end
