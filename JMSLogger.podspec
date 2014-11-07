@@ -9,7 +9,7 @@
 
 Pod::Spec.new do |s|
   s.name             = "JMSLogger"
-  s.version          = "0.2.1"
+  s.version          = "0.2.2"
   s.summary          = "Logger for CocoaLumberjack that allows logs to be read again for displaying them"
   s.description      = <<-DESC
                        This project implements a logger stores logs and allows to read them back. It uses the Realm database for storing the data, though this is an implementation detail and could change at any time.
@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   s.homepage         = "https://github.com/buscarini/JMSLogger"
   s.license          = 'MIT'
   s.author           = { "José Manuel Sánchez" => "buscarini@gmail.com" }
-  s.source           = { :git => "https://github.com/buscarini/JMSLogger.git", :tag => "0.2.1" }
+  s.source           = { :git => "https://github.com/buscarini/JMSLogger.git", :tag => "0.2.2" }
   # s.social_media_url = 'https://twitter.com/buscarini'
 
 	s.ios.deployment_target = '7.0'

@@ -13,10 +13,10 @@
 @implementation JMSLogMessage
 
 - (BOOL) populateWithMessage:(DDLogMessage *) message {
-	self.logLevel = message->logLevel;
-	self.context = message->logContext;
-	self.message = message->logMsg;
-	self.date = message->timestamp;
+	self.logLevel = message.level;
+	self.context = message.context;
+	self.message = message.message;
+	self.date = message.timestamp;
 	
 	return YES;
 }
