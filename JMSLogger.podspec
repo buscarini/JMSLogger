@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   s.homepage         = "https://github.com/buscarini/JMSLogger"
   s.license          = 'MIT'
   s.author           = { "José Manuel Sánchez" => "buscarini@gmail.com" }
-  s.source           = { :git => "https://github.com/buscarini/JMSLogger.git", :tag => "0.2.2" }
+  s.source           = { :git => "https://github.com/buscarini/JMSLogger.git", :tag => "#{s.version}" }
   # s.social_media_url = 'https://twitter.com/buscarini'
 
 	s.ios.deployment_target = '7.0'
